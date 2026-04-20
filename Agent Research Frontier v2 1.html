@@ -1,0 +1,1195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>Agent 系统研究前沿 · Meeting 1 · v2 模板版</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700;900&family=Noto+Serif+SC:wght@400;600;700;900&family=Arial&display=swap" rel="stylesheet"/>
+
+<script type="application/json" id="speaker-notes">
+[
+"大家好，今天的组会我想跟大家分享一下我最近在读的 Awesome-Agent-Papers 列表里比较有代表性的几篇工作。主题是 Agent 系统研究前沿——我会从多体架构、上下文管理、到认知存储这三个维度去梳理，最后提几个我认为可以做的破局点。整个汇报大概十五张片子，预计二十分钟，中间大家随时可以打断我。",
+"先走一下目录。今天一共五个板块：第一块是全局视角和问题引入；第二块讲多 Agent 架构；第三块是上下文处理；第四块是存储与应用；第五块是我自己的总结和两个破局点提议。",
+"我们先对齐一下背景。一个完整的 Agent 通常被拆成四个模块：Profile 决定它是谁，Memory 决定它记得什么，Planning 决定它怎么思考，Action 决定它怎么出手。2023 到 2024 年的主流工作基本停留在单体 Agent 的范式里，但从 AutoGen、MetaGPT 开始，大家越来越倾向于把任务拆给一群 Agent 去协作。这就是范式迁移的起点。",
+"但多体范式不是没有代价的。我自己读下来的感受是，Agent 系统里存在一个不可能三角：协作结构越丰富，算力和上下文消耗就越高；上下文压缩得越狠，长效记忆和推理逻辑就越容易断裂；记忆做得越深，协作时的同步成本又会回来。这三条边互相挤压，今天后面的所有内容其实都是在这个三角的某一条边上做取舍。",
+"进入第二个板块，多 Agent 架构。AutoGen 是 Microsoft 2023 年的工作，核心是 Conversable Agent，允许自由编排对话，属于 emergent 路线；MetaGPT 完全相反，把软件公司的 SOP 硬编码到 prompt 序列里，用流水线传结构化产物，属于 procedural 路线。这是今天多 Agent 设计的两个极端。",
+"但不管走哪条路，多体协作一上规模就会出现系统性问题。第一是通信冗余，token 成本线性甚至平方级增长；第二是协作冲突，尤其当上下文不完全一致；第三是责任推诿——任务失败时很难定位到底是哪一跳出了问题，因为每个 Agent 都在合理地响应它收到的输入。这三个问题叠在一起，就是为什么多 Agent 系统在生产环境里很难 scale 的根本原因。",
+"进入第三个板块，上下文处理。第一个思路是 Chain of Agents，把长上下文本身拆开——每个 Agent 只看一段，产出摘要，接力给下一个。好处是简单可复现，问题是链越长信息衰减越严重，末端 Agent 看到的可能已经是三四手信息。",
+"第二个思路更激进，直接打文本通信这个瓶颈本身。Cache-to-Cache 是今年 ICLR 2026 的工作，提出 Agent 之间不再通过生成文本通信，而是直接把 KV-Cache 投影融合过去。准确率比单模型高 6.4–14.2 个百分点，延迟降低 2.5 倍。另一条线是 BudgetThinker，用控制 token 告诉模型还剩多少预算，训出可控长度推理的模型——两条路加起来，通信带宽这件事正在被重新定义。",
+"但还有遗留痛点。一个是老问题 Lost in the Middle——上下文太长，模型对中段内容的注意力显著下降，不管 128K 还是 1M 窗口都逃不掉。另一个是动态更新的算力税：上下文有增量更新时，整个 KV-Cache 的注意力模式要重算，多 Agent 并发场景下这个税非常重。这两个点目前没有很好的工程解。",
+"进入第四板块，存储与应用。CoALA 给了一个很好的分类框架：把记忆分成工作记忆——也就是当前 LLM context window 里承载的短期内容；以及长期记忆，又细分为情景、语义、程序性三种。决策循环是 Reason → Retrieve → Act。这个分类第一次让我们可以把不同 Agent 系统放在同一套坐标系里对比。",
+"基于 CoALA 框架，两个代表性的新工作。A-MEM 是今年的工作，把 Luhmann 的卡片盒方法搬到了 LLM Agent 上：每条记忆是一张卡，新卡进来时自动生成关键词、建立链接，甚至反向更新老卡。另一条线是 Memory-R1，用强化学习让 Agent 主动决定什么时候记、记什么、怎么检索。一个是结构化被动积累，一个是主动 RL——都还在探索期。",
+"但记忆和推理之间存在一个断层。一是灾难性遗忘，新记忆覆盖旧权重，是神经网络天生的病。二是 RAG 检索内容难以真正融入推理逻辑：检索回来的是一段独立文本，是被「贴」到 prompt 里，而不是被「织」进推理链里。这也是为什么很多 RAG 系统看起来检索准确率很高，但最终答案质量没有显著提升。",
+"把三个模块串起来看。架构、上下文、存储不是三个独立问题——架构决定上下文怎么流转，上下文带宽反过来限制架构能多复杂，存储又是上下文的长期版本。MetaGPT 的 SOP 能 work，恰恰是因为它用结构化产物绕开了文本通信的带宽瓶颈；A-MEM 能 work，是因为它的链接机制在模拟一种长期的架构拓扑。三条边是同一个三角的三条边。",
+"基于这个判断，第一个破局点是系统级鲁棒性和容错。现在多 Agent 系统出问题基本靠人肉 debug，没有任何一套标准的诊断工具。可以借鉴分布式系统里的 tracing、熔断、回滚思路——给每个 Agent 调用打 span，建立因果图，confidence 过低时自动 fallback。这是偏工程、但缺口非常明确的方向。",
+"第二个破局点更激进一点，是物理层的降维打击——把异构模型之间的通信从文本层降到 KV-Cache 语义层。C2C 已经证明同构模型间这条路是通的，但异构模型——比如 coder 和 math——KV 空间维度、注意力结构都不一样，怎么对齐是开放问题。这条路如果能走通，多 Agent 通信开销会降一个数量级。这是我个人比较想尝试的方向。",
+"以上就是今天的内容。感谢各位的时间，大家有任何问题随时提——无论是对某篇 paper 的细节，还是对我提的两个破局点的可行性，我们都可以展开讨论。"
+]
+</script>
+
+<style>
+  :root{
+    /* Template palette — extracted from meeting1.pptx */
+    --purple-deep:   #660874;
+    --purple:        #632E62;
+    --purple-mid:    #9343B3;
+    --purple-light:  #9F74BE;
+    --purple-wash:   #EAE5EB;
+    --purple-wash-2: #F3EEF5;
+    --blue-accent:   #45A5ED;
+    --ink:           #1A1A1A;
+    --ink-2:         #3A3A3A;
+    --ink-3:         #7A7A7A;
+    --rule:          rgba(99, 46, 98, 0.18);
+    --paper:         #FFFFFF;
+
+    --sans: "Noto Sans SC", "微软雅黑", "Microsoft YaHei", Arial, sans-serif;
+    --serif: "Noto Serif SC", "微软雅黑", serif;
+  }
+
+  html, body{ margin:0; padding:0; background:#111; color: var(--ink); font-family: var(--sans); }
+  *{ box-sizing: border-box; }
+
+  deck-stage{ background:#0a0a0a; }
+
+  section{ background: var(--paper); font-family: var(--sans); color: var(--ink); }
+
+  /* ───────────── shared chrome ───────────── */
+  .slide{ position:absolute; inset:0; overflow:hidden; }
+
+  .page-num{
+    position:absolute; top:70px; left:70px;
+    width: 100px; height: 100px; border-radius: 50%;
+    background: var(--purple-deep);
+    display:flex; align-items:center; justify-content:center;
+    color: #fff; font-family: Arial, sans-serif; font-weight: 700; font-size: 46px;
+    z-index:3;
+  }
+  .section-title{
+    position:absolute; top:96px; left: 200px;
+    font-size: 40px; font-weight: 700; color: var(--purple-deep);
+    letter-spacing: .02em;
+  }
+  .section-en{
+    position:absolute; top:160px; left: 200px;
+    font-size: 20px; color: var(--ink-3); font-family: Arial, sans-serif;
+    letter-spacing: .2em; text-transform: uppercase;
+  }
+
+  .footer-bar{
+    position: absolute; left: 0; right: 0; bottom: 0; height: 12px;
+    background: linear-gradient(90deg, var(--purple-deep) 0%, var(--purple-mid) 60%, var(--purple-light) 100%);
+  }
+  .footer-meta{
+    position:absolute; left: 70px; bottom: 36px;
+    font-family: Arial, sans-serif; font-size: 18px; color: var(--ink-3);
+    letter-spacing: .18em; text-transform: uppercase;
+  }
+  .footer-right{
+    position:absolute; right: 70px; bottom: 36px;
+    font-family: Arial, sans-serif; font-size: 18px; color: var(--ink-3);
+    letter-spacing: .18em;
+  }
+
+  /* ───────────── cover ───────────── */
+  .cover{ background: #fff; }
+  .cover .brand{
+    position:absolute; top: 90px; left: 0; right: 0;
+    display:flex; justify-content:center; align-items:center;
+    gap: 20px; color: var(--purple-deep); font-family: var(--serif);
+  }
+  .cover .brand .logo{
+    width: 72px; height: 72px; border: 3px solid var(--purple-deep); border-radius: 50%;
+    display:flex; align-items:center; justify-content:center;
+    font-family: var(--serif); font-weight: 700; font-size: 34px; color: var(--purple-deep);
+  }
+  .cover .brand .name{ font-size: 30px; font-weight: 600; letter-spacing: .08em; }
+
+  .cover .band{
+    position:absolute; top: 340px; left: 0; right: 0; height: 420px;
+    background: var(--purple-deep);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding: 0 150px;
+  }
+  .cover .band h1{
+    margin: 0; color: #fff; text-align:center;
+    font-size: 68px; font-weight: 700; line-height: 1.2;
+    font-family: Arial, "Noto Sans SC", sans-serif;
+  }
+  .cover .band .zh{
+    margin-top: 38px; color: #fff; text-align:center;
+    font-size: 44px; font-weight: 700; letter-spacing: .04em;
+  }
+
+  .cover .rule{
+    position:absolute; top: 770px; left: 0; right: 0; height: 3px;
+    background: var(--purple-mid);
+  }
+
+  .cover .meta{
+    position:absolute; top: 840px; left: 0; right: 0;
+    display:flex; justify-content:center; gap: 80px;
+    font-size: 24px; color: var(--ink-2);
+  }
+  .cover .meta b{ color: var(--purple-deep); font-weight: 500; margin-right: 12px; }
+
+  .cover .bottom-label{
+    position:absolute; bottom: 60px; left: 0; right: 0;
+    text-align:center; font-family: Arial, sans-serif;
+    font-size: 18px; letter-spacing: .3em; color: var(--purple-light);
+    text-transform: uppercase;
+  }
+
+  /* ───────────── TOC ───────────── */
+  .toc-head{
+    position:absolute; top: 0; left: 0; right: 0; height: 321px;
+    background: var(--purple-deep);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color: #fff;
+  }
+  .toc-head h1{ margin:0; font-size: 88px; font-weight: 700; letter-spacing: .08em; }
+  .toc-head .en{ margin-top: 6px; font-family: Arial, sans-serif; font-size: 22px; letter-spacing: .4em; opacity: .9; }
+
+  .toc-grid{
+    position:absolute; top: 430px; left: 70px; right: 70px;
+    display:grid; grid-template-columns: repeat(5, 1fr); gap: 30px;
+  }
+  .toc-item{
+    display:flex; flex-direction:column; align-items:center; text-align:center;
+  }
+  .toc-item .big{
+    font-family: Arial, sans-serif; font-weight: 700; font-size: 120px;
+    color: var(--purple-deep); line-height: 1; letter-spacing: .02em;
+  }
+  .toc-item .bar{
+    width: 68px; height: 4px; background: var(--purple-mid); margin: 16px 0 20px;
+  }
+  .toc-item .zh{ font-size: 38px; font-weight: 700; color: var(--purple-deep); }
+  .toc-item .en2{
+    margin-top: 10px; font-family: Arial, sans-serif; font-size: 16px;
+    letter-spacing: .2em; color: var(--ink-3); text-transform: uppercase; text-align:center;
+  }
+
+  /* ───────────── section divider ───────────── */
+  .divider{ background: var(--purple-deep); }
+  .divider .big-num{
+    position:absolute; top: 50%; left: 160px; transform: translateY(-50%);
+    font-family: Arial, sans-serif; font-weight: 900; font-size: 380px;
+    color: rgba(255,255,255,0.12); line-height: 1;
+  }
+  .divider .zh{
+    position:absolute; top: 44%; right: 200px; transform: translateY(-50%);
+    color: #fff; font-size: 110px; font-weight: 700; letter-spacing: .1em;
+    text-align: right;
+  }
+  .divider .en{
+    position:absolute; top: 60%; right: 200px;
+    color: rgba(255,255,255,0.7); font-family: Arial, sans-serif;
+    font-size: 26px; letter-spacing: .35em; text-transform: uppercase; text-align: right;
+  }
+  .divider .tick{
+    position:absolute; top: 54%; right: 200px; width: 180px; height: 3px;
+    background: var(--purple-light);
+  }
+  .divider .foot{
+    position:absolute; bottom: 60px; left: 160px;
+    color: rgba(255,255,255,.6); font-family: Arial, sans-serif;
+    font-size: 18px; letter-spacing: .3em; text-transform: uppercase;
+  }
+
+  /* ───────────── content helpers ───────────── */
+
+  /* Section header: pill label + purple vertical bar */
+  .pill{
+    display:inline-flex; align-items:center;
+    background: var(--purple-deep); color: #fff; font-weight: 700;
+    padding: 12px 28px; font-size: 24px; letter-spacing: .04em;
+    border-radius: 2px;
+  }
+  .pill .dot{ width:8px;height:8px;background:#fff;border-radius:50%;margin-right:14px;display:inline-block; }
+
+  /* Card with light purple wash + left accent bar */
+  .card{
+    background: var(--purple-wash);
+    padding: 32px 36px;
+    position: relative;
+    border-left: 6px solid var(--purple-deep);
+  }
+  .card .label{
+    display:inline-block; background: var(--purple-deep); color:#fff;
+    padding: 8px 20px; font-size: 22px; font-weight: 700;
+    margin-bottom: 16px;
+  }
+  .card h3{
+    margin: 0 0 14px; font-size: 30px; font-weight: 700; color: var(--ink);
+  }
+  .card p{ margin: 0; font-size: 22px; line-height: 1.7; color: var(--ink-2); }
+  .card ul{ margin: 8px 0 0; padding-left: 26px; font-size: 22px; line-height: 1.75; color: var(--ink-2); }
+  .card ul li::marker{ color: var(--purple-mid); }
+
+  /* Step block — numbered purple box */
+  .step{
+    background: var(--purple-deep); color: #fff;
+    padding: 24px 28px; position: relative; min-height: 120px;
+  }
+  .step .num{
+    position:absolute; top: -16px; left: 24px;
+    width: 54px; height: 54px; border-radius: 50%;
+    background: #fff; color: var(--purple-deep);
+    display:flex; align-items:center; justify-content:center;
+    font-family: Arial, sans-serif; font-weight: 700; font-size: 26px;
+    border: 3px solid var(--purple-deep);
+  }
+  .step .t{ font-size: 26px; font-weight: 700; margin: 8px 0 10px; }
+  .step .d{ font-size: 20px; line-height: 1.6; color: rgba(255,255,255,.9); font-weight: 300; }
+
+  /* Figure placeholder */
+  .fig{
+    width:100%; height: 100%;
+    background:
+      repeating-linear-gradient(135deg,
+        rgba(99,46,98,0.06) 0 12px,
+        rgba(99,46,98,0.02) 12px 24px);
+    border: 2px dashed var(--purple-light);
+    display:flex; align-items:center; justify-content:center; text-align:center;
+    color: var(--ink-3);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 20px; line-height: 1.6; padding: 28px;
+  }
+  .fig .tag{
+    display:inline-block; background: var(--purple-deep); color:#fff;
+    padding: 6px 16px; font-size: 16px; letter-spacing:.2em; margin-bottom: 16px;
+  }
+
+  /* Warning card (for pain-points) */
+  .warn{
+    background: #fff;
+    border: 2px solid #C44;
+    border-left: 8px solid #C44;
+    padding: 24px 28px;
+  }
+  .warn .lbl{
+    display:inline-block; background:#C44; color:#fff;
+    padding: 6px 16px; font-size: 20px; font-weight:700; margin-bottom: 10px;
+  }
+  .warn h4{ margin: 6px 0 10px; font-size: 26px; color: #C44; }
+  .warn p{ margin: 0; font-size: 21px; line-height: 1.65; color: var(--ink-2); }
+
+  /* Badge */
+  .badge{
+    display:inline-block; background: var(--blue-accent); color:#fff;
+    padding: 4px 14px; font-size: 18px; font-weight: 700; letter-spacing: .1em;
+    margin-right: 10px;
+  }
+
+  /* Q-dot list */
+  .qdots{ list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:14px; }
+  .qdots li{
+    display:flex; gap: 18px; align-items: flex-start;
+    font-size: 22px; line-height: 1.6; color: var(--ink-2);
+  }
+  .qdots li .k{
+    flex-shrink:0; width: 42px; height: 42px; border-radius:50%;
+    background: var(--purple-deep); color: #fff;
+    display:flex; align-items:center; justify-content:center;
+    font-family: Arial, sans-serif; font-weight: 700; font-size: 18px;
+  }
+
+  /* Common hairline */
+  .hr{ height: 2px; background: var(--purple-deep); margin: 16px 0 24px; width: 80px; }
+
+  /* Content grid 2col */
+  .g2{ display:grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+  .g3{ display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 28px; }
+
+  /* Triangle SVG helpers */
+  .tri-wrap{ display:flex; align-items:center; justify-content:center; }
+
+</style>
+</head>
+
+<body>
+
+<deck-stage width="1920" height="1080">
+
+<!-- ──────────── 01 · Cover ──────────── -->
+<section data-label="封面">
+  <div class="slide cover">
+    <div class="brand">
+      <div class="logo">学</div>
+      <div class="name">组会汇报 · Meeting #1</div>
+    </div>
+
+    <div class="band">
+      <h1>Agent Systems Research Frontier</h1>
+      <div class="zh">多体架构 · 上下文管理 · 认知存储</div>
+    </div>
+
+    <div class="rule"></div>
+
+    <div class="meta">
+      <div><b>汇报人：</b>［ 姓名 ］</div>
+      <div><b>汇报时间：</b>2026 年 4 月</div>
+      <div><b>时长：</b>约 20 min</div>
+    </div>
+
+    <div class="bottom-label">Literature Report · Awesome-Agent-Papers</div>
+  </div>
+</section>
+
+<!-- ──────────── 02 · TOC ──────────── -->
+<section data-label="目录">
+  <div class="slide">
+    <div class="toc-head">
+      <h1>目录</h1>
+      <div class="en">C O N T E N T S</div>
+    </div>
+
+    <div class="toc-grid">
+      <div class="toc-item">
+        <div class="big">01</div><div class="bar"></div>
+        <div class="zh">研究背景</div>
+        <div class="en2">Background</div>
+      </div>
+      <div class="toc-item">
+        <div class="big">02</div><div class="bar"></div>
+        <div class="zh">多 Agent 架构</div>
+        <div class="en2">Multi-Agent</div>
+      </div>
+      <div class="toc-item">
+        <div class="big">03</div><div class="bar"></div>
+        <div class="zh">上下文处理</div>
+        <div class="en2">Context</div>
+      </div>
+      <div class="toc-item">
+        <div class="big">04</div><div class="bar"></div>
+        <div class="zh">存储与应用</div>
+        <div class="en2">Memory</div>
+      </div>
+      <div class="toc-item">
+        <div class="big">05</div><div class="bar"></div>
+        <div class="zh">总结与破局</div>
+        <div class="en2">Outlook</div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+  </div>
+</section>
+
+<!-- ──────────── 03 · 研究背景（Agent 四要素） ──────────── -->
+<section data-label="研究背景">
+  <div class="slide">
+    <div class="page-num">1</div>
+    <div class="section-title">研究背景</div>
+    <div class="section-en">Background · Paradigm Shift</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px;">
+      <div class="pill"><span class="dot"></span>Agent 四要素 · 单体 → 多体</div>
+      <div class="hr"></div>
+      <p style="font-size:26px; line-height:1.6; color:var(--ink-2); margin:0 0 32px; max-width: 1400px;">
+        一个完整的 Agent 由 <b style="color:var(--purple-deep)">Profile · Memory · Planning · Action</b> 四个模块构成。2024 年以来，主流范式正从「单体闭环」迁移到「多体协作」。
+      </p>
+
+      <div class="g3" style="margin-top: 20px;">
+        <div class="card">
+          <div class="label">① PROFILE</div>
+          <h3>它是谁</h3>
+          <p>角色、能力边界、行为准则 —— 通过 system prompt 或人格化提示显式声明。</p>
+        </div>
+        <div class="card">
+          <div class="label">② MEMORY</div>
+          <h3>它记得什么</h3>
+          <p>短期上下文 + 长期经验，决定跨任务的一致性与学习能力。</p>
+        </div>
+        <div class="card">
+          <div class="label">③ PLANNING</div>
+          <h3>它怎么思考</h3>
+          <p>CoT · ReAct · ToT —— 将目标分解为可执行的子步骤序列。</p>
+        </div>
+      </div>
+
+      <div style="margin-top: 28px; display:flex; gap: 40px; align-items:center;">
+        <div class="card" style="flex:1;">
+          <div class="label">④ ACTION</div>
+          <h3>它怎么出手</h3>
+          <p>工具调用、代码执行、API 交互 —— Agent 对外输出的落点。</p>
+        </div>
+        <div style="flex:1.2; padding: 20px 28px; background: var(--purple-deep); color:#fff;">
+          <div style="font-family: Arial, sans-serif; font-size: 18px; letter-spacing:.2em; opacity:.8;">KEY SHIFT</div>
+          <div style="font-size: 28px; font-weight: 700; margin-top: 8px; line-height:1.4;">
+            从单个 LLM 闭环 → 多 Agent 协作，才是 2024–2026 的主叙事。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 01 Background</div>
+    <div class="footer-right">01 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 04 · 核心矛盾 不可能三角 ──────────── -->
+<section data-label="不可能三角">
+  <div class="slide">
+    <div class="page-num">2</div>
+    <div class="section-title">研究背景</div>
+    <div class="section-en">Core Tension · Impossibility Triangle</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>Agent 系统的不可能三角</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 20px; grid-template-columns: 1fr 1.1fr; gap: 60px; align-items: center;">
+        <div class="tri-wrap">
+          <svg viewBox="0 0 620 560" width="620" height="560" style="max-width:100%;">
+            <polygon points="310,40 580,500 40,500"
+              fill="none" stroke="#660874" stroke-width="4"/>
+            <circle cx="310" cy="40" r="90" fill="#660874"/>
+            <text x="310" y="30" text-anchor="middle" fill="#fff" font-family="Arial" font-size="20" font-weight="700" letter-spacing="2">COLLAB</text>
+            <text x="310" y="60" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">协作结构</text>
+            <circle cx="580" cy="500" r="90" fill="#9343B3"/>
+            <text x="580" y="490" text-anchor="middle" fill="#fff" font-family="Arial" font-size="20" font-weight="700" letter-spacing="2">CONTEXT</text>
+            <text x="580" y="520" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">上下文 / 算力</text>
+            <circle cx="40" cy="500" r="90" fill="#45A5ED"/>
+            <text x="40" y="490" text-anchor="middle" fill="#fff" font-family="Arial" font-size="20" font-weight="700" letter-spacing="2">MEMORY</text>
+            <text x="40" y="520" text-anchor="middle" fill="#fff" font-size="22" font-weight="700">长效记忆</text>
+
+            <text x="310" y="310" text-anchor="middle" fill="#660874" font-size="24" font-weight="700" font-style="italic">三边互相挤压</text>
+          </svg>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap: 22px;">
+          <div class="card">
+            <div class="label">边 1</div>
+            <h3 style="font-size:26px">协作越丰富 → 上下文 / 算力代价越高</h3>
+            <p style="font-size:21px">每多一个 Agent，message-passing 的 token 成本成倍增长。</p>
+          </div>
+          <div class="card">
+            <div class="label">边 2</div>
+            <h3 style="font-size:26px">上下文压缩越狠 → 长效记忆越容易断裂</h3>
+            <p style="font-size:21px">总结 / 摘要 / 截断都会丢失长期一致性信号。</p>
+          </div>
+          <div class="card">
+            <div class="label">边 3</div>
+            <h3 style="font-size:26px">记忆做得越深 → 协作同步成本回来</h3>
+            <p style="font-size:21px">多 Agent 共享长期记忆意味着持续的写冲突与检索成本。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 01 Background</div>
+    <div class="footer-right">02 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 05 · 分节页：多 Agent 架构 ──────────── -->
+<section data-label="分节 · 多Agent架构">
+  <div class="slide divider">
+    <div class="big-num">02</div>
+    <div class="zh">多 Agent 架构</div>
+    <div class="tick"></div>
+    <div class="en">Part 02 · Multi-Agent Architecture</div>
+    <div class="foot">Meeting 1 · Agent Systems Research Frontier</div>
+  </div>
+</section>
+
+<!-- ──────────── 06 · AutoGen vs MetaGPT ──────────── -->
+<section data-label="AutoGen vs MetaGPT">
+  <div class="slide">
+    <div class="page-num">3</div>
+    <div class="section-title">多 Agent 架构</div>
+    <div class="section-en">AutoGen ⟷ MetaGPT · Two Extremes</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>协作范式的两个极端</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 20px; align-items:stretch;">
+        <div class="card" style="display:flex; flex-direction:column;">
+          <div class="label">A · AUTOGEN (MSR 2023)</div>
+          <h3>自由对话 · Emergent</h3>
+          <p style="margin-bottom: 18px">每个 Agent = Conversable Agent；开发者自由编排群聊、分层、人类在环。</p>
+          <div class="fig" style="flex:1; min-height: 280px">
+            <div>
+              <span class="tag">FIGURE · 占位</span><br/>
+              [ AutoGen 拓扑：<br/>
+              User ⇄ Manager ⇄ {Coder, Critic, Tool-Agent}<br/>
+              边是自由 message passing ]
+            </div>
+          </div>
+          <div style="margin-top: 14px; font-size: 20px; color: var(--ink-3);">
+            ✓ 灵活、可涌现协作模式　　✗ 不可预测、难以调试
+          </div>
+        </div>
+
+        <div class="card" style="display:flex; flex-direction:column;">
+          <div class="label">B · METAGPT (2024)</div>
+          <h3>SOP 流水线 · Procedural</h3>
+          <p style="margin-bottom: 18px">把软件公司的 SOP 硬编码到 prompt 序列中：PM → Arch → Eng → QA，传结构化产物。</p>
+          <div class="fig" style="flex:1; min-height: 280px">
+            <div>
+              <span class="tag">FIGURE · 占位</span><br/>
+              [ MetaGPT SOP：<br/>
+              Requirement → Design Doc → Code → Test<br/>
+              边是结构化 artifact 移交 ]
+            </div>
+          </div>
+          <div style="margin-top: 14px; font-size: 20px; color: var(--ink-3);">
+            ✓ 可复现、工业可控　　✗ 流程僵硬、难以扩展新角色
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 02 Multi-Agent</div>
+    <div class="footer-right">03 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 07 · 系统性危机 三失效模式 ──────────── -->
+<section data-label="多体协作系统性危机">
+  <div class="slide">
+    <div class="page-num">4</div>
+    <div class="section-title">多 Agent 架构</div>
+    <div class="section-en">Three Systemic Failures</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>多体协作的三大系统性失效</div>
+      <div class="hr"></div>
+
+      <p style="font-size:22px; color:var(--ink-2); margin: 0 0 26px; max-width: 1400px;">
+        不管走哪条路，一旦规模化，都会撞上同样的三堵墙。这是多 Agent 系统难以进入生产环境的根本原因。
+      </p>
+
+      <div class="g3">
+        <div class="warn">
+          <div class="lbl">失效 01 · 通信冗余</div>
+          <h4>Redundant Communication</h4>
+          <p>Agent 之间反复复述已有信息，token 成本随节点数线性乃至平方增长。</p>
+          <div style="margin-top:14px; font-family: Arial, monospace; font-size:20px; color:#C44;">
+            Cost ∝ N² · context_len
+          </div>
+        </div>
+        <div class="warn">
+          <div class="lbl">失效 02 · 协作冲突</div>
+          <h4>Collaboration Conflict</h4>
+          <p>不同 Agent 基于不完整上下文做出相互矛盾的判断，仲裁机制缺失。</p>
+          <div style="margin-top:14px; font-family: Arial, monospace; font-size:20px; color:#C44;">
+            No shared ground truth
+          </div>
+        </div>
+        <div class="warn">
+          <div class="lbl">失效 03 · 责任推诿</div>
+          <h4>Blame Diffusion</h4>
+          <p>任务失败时无法定位哪一跳出错——每个 Agent 都在合理地响应输入。</p>
+          <div style="margin-top:14px; font-family: Arial, monospace; font-size:20px; color:#C44;">
+            No causal attribution
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 32px; padding: 20px 28px; background: var(--purple-wash); border-left: 6px solid var(--purple-deep);">
+        <span style="color: var(--purple-deep); font-weight: 700; font-size: 22px;">小结 · </span>
+        <span style="font-size: 22px; color: var(--ink-2);">这三个失效一起构成了 <b>多 Agent 生产化的第一道鸿沟</b>——也是后面破局点一要攻的方向。</span>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 02 Multi-Agent</div>
+    <div class="footer-right">04 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 08 · 分节 03 上下文处理 ──────────── -->
+<section data-label="分节 · 上下文处理">
+  <div class="slide divider">
+    <div class="big-num">03</div>
+    <div class="zh">上下文处理</div>
+    <div class="tick"></div>
+    <div class="en">Part 03 · Context & Communication</div>
+    <div class="foot">Meeting 1 · Agent Systems Research Frontier</div>
+  </div>
+</section>
+
+<!-- ──────────── 09 · Chain of Agents ──────────── -->
+<section data-label="长上下文任务分解">
+  <div class="slide">
+    <div class="page-num">5</div>
+    <div class="section-title">上下文处理</div>
+    <div class="section-en">Chain-style Handoff</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>思路 A · 把长上下文拆成短上下文的接力</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 20px; grid-template-columns: 1.05fr 1fr; gap: 50px;">
+        <div>
+          <div class="card" style="margin-bottom: 22px">
+            <div class="label">CHAIN OF AGENTS</div>
+            <h3>每个 Agent 只读一段，接力传摘要</h3>
+            <p>Doc₁ → A₁ → 摘要 + Doc₂ → A₂ → … → Aₙ → Answer</p>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:14px">
+            <div style="display:flex; gap:18px; align-items:flex-start;">
+              <span class="badge">优势</span>
+              <span style="font-size:22px; line-height:1.6; color:var(--ink-2);">简单可复现、不改模型结构、对上下文长度无硬限制。</span>
+            </div>
+            <div style="display:flex; gap:18px; align-items:flex-start;">
+              <span class="badge" style="background:#C44;">劣势</span>
+              <span style="font-size:22px; line-height:1.6; color:var(--ink-2);">链越长信息衰减越严重——末端 Agent 面对的是多手摘要。</span>
+            </div>
+            <div style="display:flex; gap:18px; align-items:flex-start;">
+              <span class="badge" style="background:var(--purple-mid);">场景</span>
+              <span style="font-size:22px; line-height:1.6; color:var(--ink-2);">长文档摘要、跨文档问答、批量信息抽取。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="fig" style="min-height: 480px">
+          <div>
+            <span class="tag">FIGURE · 占位</span><br/>
+            [ Chain of Agents 链式处理示意<br/>
+            Doc₁ → A₁ → (s₁) →<br/>
+            Doc₂ + s₁ → A₂ → (s₂) →<br/>
+            … → Aₙ → Answer ]
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 03 Context</div>
+    <div class="footer-right">05 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 10 · C2C + BudgetThinker ──────────── -->
+<section data-label="突破文本通信瓶颈">
+  <div class="slide">
+    <div class="page-num">6</div>
+    <div class="section-title">上下文处理</div>
+    <div class="section-en">Breakthrough · C2C + BudgetThinker</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>思路 B · 直接打文本通信这个瓶颈</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 20px;">
+        <div class="step" style="background:var(--purple-deep);">
+          <div class="num">B1</div>
+          <div class="t" style="margin-top: 18px">Cache-to-Cache · 跳过文本，直接共享 KV-Cache</div>
+          <div class="d">
+            Agent 间不再通过生成文本通信——把发送端的 KV-Cache 投影、融合到接收端。
+            <div style="margin-top: 14px; font-family: Arial, monospace; font-size: 20px; color: #fff; background: rgba(255,255,255,0.12); padding: 12px 16px; display: inline-block;">
+              Acc ↑ 6.4–14.2%　　Latency ↓ 2.5×
+            </div>
+          </div>
+        </div>
+
+        <div class="step" style="background:var(--purple-mid);">
+          <div class="num">B2</div>
+          <div class="t" style="margin-top: 18px">BudgetThinker · 周期性插入控制 token</div>
+          <div class="d">
+            SFT + RL 训出可控推理长度的模型，让模型"知道"还剩多少预算。
+            <div style="margin-top: 14px; font-family: Arial, monospace; font-size: 20px; color: #fff; background: rgba(255,255,255,0.18); padding: 12px 16px; display: inline-block;">
+              [budget=200] reasoning ... [/budget]
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 32px; background: var(--purple-wash); padding: 28px 32px; border-left: 6px solid var(--purple-deep);">
+        <div style="color: var(--purple-deep); font-weight: 700; font-size: 24px; margin-bottom: 10px;">
+          合在一起看 · 通信带宽被重新定义
+        </div>
+        <div style="font-size:22px; line-height:1.65; color: var(--ink-2);">
+          C2C 把通信从 <i>离散符号</i> 降到了 <i>连续表征</i>；BudgetThinker 把算力变成了<i>可寻址资源</i>。
+          两条路加起来，Multi-LLM 系统的「物理层」正在被重写。
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 03 Context</div>
+    <div class="footer-right">06 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 11 · 遗留痛点 ──────────── -->
+<section data-label="上下文遗留痛点">
+  <div class="slide">
+    <div class="page-num">7</div>
+    <div class="section-title">上下文处理</div>
+    <div class="section-en">Unsolved · Two Structural Pains</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>遗留痛点 · 两个还没有好解的结构性问题</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 30px; gap: 50px;">
+        <div class="warn">
+          <div class="lbl">痛点 01</div>
+          <h4 style="font-size: 30px;">Lost in the Middle</h4>
+          <p>上下文太长时，模型对<b style="color:#C44">中段内容</b>的注意力显著下降。128K、1M 窗口都逃不掉。</p>
+          <div style="margin-top: 18px; padding: 14px 18px; background: #FFF5F5; border-left: 4px solid #C44; font-size: 20px; color: var(--ink-2);">
+            <b style="color:#C44">本质 · </b>位置编码衰减 + 注意力稀释，<br/>
+            不是靠堆窗口大小能解决的问题。
+          </div>
+        </div>
+
+        <div class="warn">
+          <div class="lbl">痛点 02</div>
+          <h4 style="font-size: 30px;">动态更新的算力税</h4>
+          <p>上下文有增量更新时，整个 <b style="color:#C44">KV-Cache</b> 的注意力模式需要重算。</p>
+          <div style="margin-top: 18px; padding: 14px 18px; background: #FFF5F5; border-left: 4px solid #C44; font-size: 20px; color: var(--ink-2);">
+            <b style="color:#C44">本质 · </b>多 Agent 并发更新场景下，<br/>
+            缓存失效代价呈几何级上涨。
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 40px; font-size: 24px; color: var(--purple-deep); font-weight: 700; text-align: center;">
+        ⚠　这两点加起来，决定了「纯靠扩窗口」的路线不可持续。
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 03 Context</div>
+    <div class="footer-right">07 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 12 · 分节 04 存储与应用 ──────────── -->
+<section data-label="分节 · 存储与应用">
+  <div class="slide divider">
+    <div class="big-num">04</div>
+    <div class="zh">存储与应用</div>
+    <div class="tick"></div>
+    <div class="en">Part 04 · Memory & Cognition</div>
+    <div class="foot">Meeting 1 · Agent Systems Research Frontier</div>
+  </div>
+</section>
+
+<!-- ──────────── 13 · CoALA 分类 ──────────── -->
+<section data-label="CoALA 认知分类">
+  <div class="slide">
+    <div class="page-num">8</div>
+    <div class="section-title">存储与应用</div>
+    <div class="section-en">CoALA · A Taxonomy of Agent Memory</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>CoALA · 把 Agent 的大脑放进同一套坐标系</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 20px; grid-template-columns: 1fr 1.1fr; gap: 40px; align-items: start;">
+        <div>
+          <div class="card" style="margin-bottom: 20px;">
+            <div class="label">WORKING MEMORY</div>
+            <h3 style="font-size:26px">短期 · 当前 context window</h3>
+            <p>当前 LLM 正在"思考"的全部信息——受窗口长度硬限制。</p>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap: 14px;">
+            <div style="background: var(--purple-wash); padding: 20px 24px; border-left: 6px solid var(--purple-mid);">
+              <div style="color: var(--purple-deep); font-weight: 700; font-size:22px; margin-bottom: 6px;">LONG-TERM · Episodic 情景记忆</div>
+              <div style="font-size:20px; color:var(--ink-2);">"我上次做过这个任务" —— 经历的 trace。</div>
+            </div>
+            <div style="background: var(--purple-wash); padding: 20px 24px; border-left: 6px solid var(--purple-mid);">
+              <div style="color: var(--purple-deep); font-weight: 700; font-size:22px; margin-bottom: 6px;">LONG-TERM · Semantic 语义记忆</div>
+              <div style="font-size:20px; color:var(--ink-2);">"我知道这些事实" —— 抽象化的知识。</div>
+            </div>
+            <div style="background: var(--purple-wash); padding: 20px 24px; border-left: 6px solid var(--purple-mid);">
+              <div style="color: var(--purple-deep); font-weight: 700; font-size:22px; margin-bottom: 6px;">LONG-TERM · Procedural 程序性记忆</div>
+              <div style="font-size:20px; color:var(--ink-2);">"我会做这类事" —— 可调用的策略与技能。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="fig" style="min-height: 540px">
+          <div>
+            <span class="tag">FIGURE · 占位</span><br/>
+            [ CoALA 决策循环：<br/>
+            <br/>
+            Reason ─► Retrieve ─► Act<br/>
+            ▲                    │<br/>
+            └────── Learn ◄──────┘<br/>
+            <br/>
+            Working ⇄ Episodic<br/>
+            Working ⇄ Semantic<br/>
+            Working ⇄ Procedural ]
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 04 Memory</div>
+    <div class="footer-right">08 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 14 · A-MEM + Memory-R1 ──────────── -->
+<section data-label="动态记忆探索">
+  <div class="slide">
+    <div class="page-num">9</div>
+    <div class="section-title">存储与应用</div>
+    <div class="section-en">Dynamic Memory · A-MEM + Memory-R1</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>动态记忆的两条探索路线</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 24px;">
+        <div class="step" style="background: var(--purple-deep); min-height: 360px;">
+          <div class="num">M1</div>
+          <div class="t" style="margin-top: 18px">A-MEM · 卡片盒 (Zettelkasten)</div>
+          <div class="d">
+            每条记忆是一张卡。新卡进来时自动：<br/>
+            <div style="margin-top: 12px; padding-left: 4px;">
+              ① 生成关键词与上下文标签<br/>
+              ② 检索并建立与旧卡的链接<br/>
+              ③ <b style="color:#fff">反向更新</b>被引用的老卡
+            </div>
+          </div>
+          <div style="margin-top: 16px; font-family: Arial, monospace; font-size: 18px; color: #fff; background: rgba(255,255,255,0.12); padding: 10px 14px; display: inline-block;">
+            结构化 · 被动积累
+          </div>
+        </div>
+
+        <div class="step" style="background: var(--blue-accent); min-height: 360px;">
+          <div class="num" style="border-color: var(--blue-accent); color: var(--blue-accent);">M2</div>
+          <div class="t" style="margin-top: 18px">Memory-R1 · 强化学习主动记忆</div>
+          <div class="d">
+            用 RL 训 Agent 主动决定：<br/>
+            <div style="margin-top: 12px; padding-left: 4px;">
+              ① <b style="color:#fff">何时</b>写入记忆<br/>
+              ② <b style="color:#fff">记什么</b>内容<br/>
+              ③ <b style="color:#fff">如何</b>检索
+            </div>
+          </div>
+          <div style="margin-top: 16px; font-family: Arial, monospace; font-size: 18px; color: #fff; background: rgba(255,255,255,0.18); padding: 10px 14px; display: inline-block;">
+            主动策略 · Reward-driven
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 30px; background: var(--purple-wash); padding: 22px 30px; border-left: 6px solid var(--purple-deep);">
+        <span style="color: var(--purple-deep); font-weight: 700; font-size: 22px;">对照 · </span>
+        <span style="font-size: 22px; color: var(--ink-2);">
+          A-MEM 用<b>结构</b>换能力，Memory-R1 用<b>学习信号</b>换能力；两者都还远未收敛。
+        </span>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 04 Memory</div>
+    <div class="footer-right">09 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 15 · 记忆与推理断层 ──────────── -->
+<section data-label="记忆推理断层">
+  <div class="slide">
+    <div class="page-num">10</div>
+    <div class="section-title">存储与应用</div>
+    <div class="section-en">The Gap · Memory ⇎ Reasoning</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>记忆与推理之间，还有一个结构性断层</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 30px; gap: 40px;">
+        <div class="warn">
+          <div class="lbl">GAP 01</div>
+          <h4 style="font-size: 30px;">灾难性遗忘</h4>
+          <p>新记忆写入会覆盖旧的权重表征 —— 神经网络与生俱来的病。</p>
+          <div style="margin-top: 18px; padding: 14px 18px; background: #FFF5F5; border-left: 4px solid #C44; font-size: 20px; color: var(--ink-2);">
+            <b style="color:#C44">表现 · </b>连续学习任务上精度断崖式下跌。<br/>
+            <b style="color:#C44">现状 · </b>EWC、LoRA-continual 都只是缓解。
+          </div>
+        </div>
+
+        <div class="warn">
+          <div class="lbl">GAP 02</div>
+          <h4 style="font-size: 30px;">RAG ≠ 推理逻辑</h4>
+          <p>检索回来的是独立文本，被 <b style="color:#C44">「贴」</b>到 prompt 里，而不是被 <b style="color:#C44">「织」</b>进推理链。</p>
+          <div style="margin-top: 18px; padding: 14px 18px; background: #FFF5F5; border-left: 4px solid #C44; font-size: 20px; color: var(--ink-2);">
+            <b style="color:#C44">表现 · </b>检索准确率高 ≠ 答案质量高。<br/>
+            <b style="color:#C44">根因 · </b>检索结果缺乏推理结构对齐。
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 40px; text-align: center; font-size: 24px; color: var(--purple-deep); font-weight: 700;">
+        ⚠　这两个 Gap 决定了：<b>记忆的"量"能上去，但"用法"还没被解决。</b>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 04 Memory</div>
+    <div class="footer-right">10 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 16 · 分节 05 总结与破局 ──────────── -->
+<section data-label="分节 · 总结与破局">
+  <div class="slide divider">
+    <div class="big-num">05</div>
+    <div class="zh">总结与破局</div>
+    <div class="tick"></div>
+    <div class="en">Part 05 · Synthesis & Opportunities</div>
+    <div class="foot">Meeting 1 · Agent Systems Research Frontier</div>
+  </div>
+</section>
+
+<!-- ──────────── 17 · 三维关联 ──────────── -->
+<section data-label="三维关联总结">
+  <div class="slide">
+    <div class="page-num">11</div>
+    <div class="section-title">总结与破局</div>
+    <div class="section-en">Synthesis · Same Triangle, Three Sides</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>三个模块 · 同一个三角</div>
+      <div class="hr"></div>
+
+      <p style="font-size: 24px; color: var(--ink-2); line-height: 1.6; margin: 0 0 24px; max-width: 1500px;">
+        架构决定上下文怎么流转，上下文带宽反过来限制架构能多复杂，存储又是上下文的长期版本 ——
+        <b style="color:var(--purple-deep)">三条边是同一个三角的三条边。</b>
+      </p>
+
+      <div class="g3" style="margin-top: 12px;">
+        <div class="card" style="border-left-color: var(--purple-deep);">
+          <div class="label">OBSERVATION 1</div>
+          <h3 style="font-size:26px">MetaGPT SOP 为什么 work？</h3>
+          <p>它用<b>结构化产物</b>绕开了文本通信的带宽瓶颈 —— 本质是用架构层换了上下文层。</p>
+        </div>
+        <div class="card" style="border-left-color: var(--purple-mid);">
+          <div class="label">OBSERVATION 2</div>
+          <h3 style="font-size:26px">A-MEM 为什么 work？</h3>
+          <p>它的<b>卡片链接机制</b>在模拟一种长期的架构拓扑 —— 本质是用记忆层换了架构层。</p>
+        </div>
+        <div class="card" style="border-left-color: var(--blue-accent);">
+          <div class="label">OBSERVATION 3</div>
+          <h3 style="font-size:26px">C2C 为什么可行？</h3>
+          <p>它把<b>上下文带宽</b>本身当成物理层改造 —— 本质是从上下文层反向松绑架构层。</p>
+        </div>
+      </div>
+
+      <div style="margin-top: 36px; padding: 26px 32px; background: var(--purple-deep); color: #fff;">
+        <div style="font-family: Arial, sans-serif; font-size: 18px; letter-spacing: .2em; opacity: .7;">KEY INSIGHT</div>
+        <div style="font-size: 28px; font-weight: 700; margin-top: 10px; line-height: 1.4;">
+          真正的进步不在三角的某个"顶点"上发力，而是换一条边的定义。
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 05 Outlook</div>
+    <div class="footer-right">11 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 18 · 破局点 1 ──────────── -->
+<section data-label="破局点一">
+  <div class="slide">
+    <div class="page-num">12</div>
+    <div class="section-title">总结与破局</div>
+    <div class="section-en">Opportunity I · System-Level Robustness</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>破局点一 · Agentic Workflow 的系统级鲁棒性诊断</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 24px; grid-template-columns: 1.1fr 1fr; gap: 44px; align-items: start;">
+        <div>
+          <div class="warn" style="border-color: var(--purple-deep); border-left-color: var(--purple-deep); background: var(--purple-wash-2);">
+            <div class="lbl" style="background: var(--purple-deep);">PROBLEM</div>
+            <h4 style="font-size: 28px; color: var(--purple-deep);">多 Agent 系统出错时，只能靠人肉 debug。</h4>
+            <p>没有任何一套<b>标准的诊断工具</b>。现有框架几乎没有标准化的失败归因、回滚与熔断机制。</p>
+          </div>
+
+          <p style="margin-top: 20px; font-size: 22px; color: var(--ink-2); line-height: 1.6;">
+            借鉴对象 · <b style="color: var(--purple-deep)">分布式系统二十年的工程沉淀</b>——tracing、熔断、重试、fallback。
+          </p>
+
+          <ul class="qdots" style="margin-top: 20px;">
+            <li><span class="k">L1</span>每次 Agent 调用打 <b>span</b>，构建因果图（causal graph）</li>
+            <li><span class="k">L2</span>Confidence-aware fallback —— 信心过低自动触发备选路</li>
+            <li><span class="k">L3</span>可回滚的状态快照：局部失败不污染全局上下文</li>
+            <li><span class="k">L4</span>端到端的系统级 benchmark：测失败定位能力</li>
+          </ul>
+        </div>
+
+        <div class="fig" style="min-height: 540px">
+          <div>
+            <span class="tag">FIGURE · 占位</span><br/>
+            [ Agentic Tracing 面板示意：<br/>
+            <br/>
+            每个 Agent 节点 → span 树<br/>
+            失败点高亮<br/>
+            类比 OpenTelemetry / Jaeger UI ]
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 22px; font-size: 20px; color: var(--ink-3); font-style: italic; text-align: right;">
+        偏工程 · 缺口明确 · 门槛可控 · 适合作为阶段性产出。
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 05 Outlook</div>
+    <div class="footer-right">12 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 19 · 破局点 2 ──────────── -->
+<section data-label="破局点二">
+  <div class="slide">
+    <div class="page-num">13</div>
+    <div class="section-title">总结与破局</div>
+    <div class="section-en">Opportunity II · Physical-Layer Breakthrough</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>破局点二 · 异构模型间的 KV-Cache 语义通讯</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 24px; grid-template-columns: 1.1fr 1fr; gap: 44px; align-items: start;">
+        <div>
+          <div class="warn" style="border-color: var(--purple-deep); border-left-color: var(--purple-deep); background: var(--purple-wash-2);">
+            <div class="lbl" style="background: var(--purple-deep);">HYPOTHESIS</div>
+            <h4 style="font-size: 28px; color: var(--purple-deep);">C2C 在同构模型成立 · 异构模型是下一座山。</h4>
+            <p>Coder × Math × Vision 这种<b>异构</b>组合——隐层维度、注意力结构、词表都不同——如何对齐仍是开放问题。</p>
+          </div>
+
+          <p style="margin-top: 20px; font-size: 22px; color: var(--ink-2); line-height: 1.6;">
+            技术路线 · <b style="color: var(--purple-deep)">四步走</b>：
+          </p>
+
+          <ul class="qdots" style="margin-top: 16px;">
+            <li><span class="k" style="background: var(--blue-accent)">R1</span>异构 KV 空间的对齐 · Projection + Gating</li>
+            <li><span class="k" style="background: var(--blue-accent)">R2</span>统一 cache schema · 训练跨模型语义锚点</li>
+            <li><span class="k" style="background: var(--blue-accent)">R3</span>Budget-aware fuser · 与控制 token 联动</li>
+            <li><span class="k" style="background: var(--blue-accent)">R4</span>目标 · 多 Agent 通信开销降一个数量级</li>
+          </ul>
+        </div>
+
+        <div class="fig" style="min-height: 540px">
+          <div>
+            <span class="tag">FIGURE · 占位</span><br/>
+            [ 异构 KV 对齐示意<br/>
+            <br/>
+            Coder Cache ─┐<br/>
+            Math Cache ──┼─► Universal<br/>
+            Vision Cache ┘   Cache Bus<br/>
+            <br/>
+            → Target Cache ]
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 20px; padding: 16px 24px; background: var(--purple-deep); color: #fff; font-size: 22px;">
+        <b style="font-family: Arial, sans-serif; letter-spacing: .1em; margin-right: 10px;">HIGH-RISK · HIGH-RETURN</b>
+        若成立，将重塑整个 Multi-LLM 系统的"物理层"设计。
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · § 05 Outlook</div>
+    <div class="footer-right">13 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 20 · 参考文献 ──────────── -->
+<section data-label="参考文献">
+  <div class="slide">
+    <div class="page-num">14</div>
+    <div class="section-title">参考文献</div>
+    <div class="section-en">References</div>
+
+    <div style="position:absolute; top:250px; left:70px; right:70px; bottom: 90px;">
+      <div class="pill"><span class="dot"></span>本次汇报涉及的主要工作</div>
+      <div class="hr"></div>
+
+      <div class="g2" style="margin-top: 24px;">
+        <div style="display:flex; flex-direction:column; gap: 14px;">
+          <div style="background: var(--purple-wash); padding: 16px 22px; border-left: 6px solid var(--purple-deep);">
+            <div style="font-weight:700; color: var(--purple-deep); font-size: 22px;">Wu et al. 2023 · AutoGen</div>
+            <div style="font-size: 20px; color: var(--ink-2); margin-top: 4px;">Enabling Next-Gen LLM Applications via Multi-Agent Conversation</div>
+          </div>
+          <div style="background: var(--purple-wash); padding: 16px 22px; border-left: 6px solid var(--purple-deep);">
+            <div style="font-weight:700; color: var(--purple-deep); font-size: 22px;">Hong et al. 2024 · MetaGPT</div>
+            <div style="font-size: 20px; color: var(--ink-2); margin-top: 4px;">Meta Programming for A Multi-Agent Collaborative Framework</div>
+          </div>
+          <div style="background: var(--purple-wash); padding: 16px 22px; border-left: 6px solid var(--purple-deep);">
+            <div style="font-weight:700; color: var(--purple-deep); font-size: 22px;">Fu et al. 2026 · Cache-to-Cache</div>
+            <div style="font-size: 20px; color: var(--ink-2); margin-top: 4px;">Direct Semantic Communication Between LLMs</div>
+          </div>
+          <div style="background: var(--purple-wash); padding: 16px 22px; border-left: 6px solid var(--purple-deep);">
+            <div style="font-weight:700; color: var(--purple-deep); font-size: 22px;">Wen et al. 2025 · BudgetThinker</div>
+            <div style="font-size: 20px; color: var(--ink-2); margin-top: 4px;">Empowering Budget-aware LLM Reasoning with Control Tokens</div>
+          </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap: 14px;">
+          <div style="background: var(--purple-wash); padding: 16px 22px; border-left: 6px solid var(--purple-mid);">
+            <div style="font-weight:700; color: var(--purple-deep); font-size: 22px;">Sumers et al. 2024 · CoALA</div>
+            <div style="font-size: 20px; color: var(--ink-2); margin-top: 4px;">Cognitive Architectures for Language Agents</div>
+          </div>
+          <div style="background: var(--purple-wash); padding: 16px 22px; border-left: 6px solid var(--purple-mid);">
+            <div style="font-weight:700; color: var(--purple-deep); font-size: 22px;">Xu et al. 2025 · A-MEM</div>
+            <div style="font-size: 20px; color: var(--ink-2); margin-top: 4px;">Agentic Memory for LLM Agents</div>
+          </div>
+          <div style="background: var(--purple-wash); padding: 16px 22px; border-left: 6px solid var(--purple-mid);">
+            <div style="font-weight:700; color: var(--purple-deep); font-size: 22px;">Memory-R1 · 2025</div>
+            <div style="font-size: 20px; color: var(--ink-2); margin-top: 4px;">Reinforcement-Learned Active Memory Policies</div>
+          </div>
+          <div style="background: var(--purple-wash); padding: 16px 22px; border-left: 6px solid var(--blue-accent);">
+            <div style="font-weight:700; color: var(--purple-deep); font-size: 22px;">Luo et al. 2025 · Agent Survey</div>
+            <div style="font-size: 20px; color: var(--ink-2); margin-top: 4px;">Methodology, Applications and Challenges</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-bar"></div>
+    <div class="footer-meta">Agent Systems · References</div>
+    <div class="footer-right">14 / 15</div>
+  </div>
+</section>
+
+<!-- ──────────── 21 · 致谢页 ──────────── -->
+<section data-label="致谢">
+  <div class="slide divider" style="background: var(--purple-deep);">
+    <div style="position:absolute; top: 120px; right: 100px; font-family: Arial, sans-serif; font-size: 22px; color: rgba(255,255,255,.7); letter-spacing: .3em;">LITERATURE REPORT</div>
+
+    <div style="position:absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%); text-align:center;">
+      <div style="font-size: 140px; font-weight: 700; color: #fff; letter-spacing: .12em;">敬请批评指正</div>
+      <div style="margin-top: 40px; width: 240px; height: 3px; background: var(--purple-light); margin-left:auto; margin-right:auto;"></div>
+      <div style="margin-top: 40px; font-family: Arial, sans-serif; font-size: 36px; color: rgba(255,255,255,.9); letter-spacing: .25em;">
+        THANK YOU &nbsp;·&nbsp; Q &amp; A
+      </div>
+    </div>
+
+    <div style="position:absolute; bottom: 120px; left: 0; right: 0; display:flex; justify-content:center; gap: 80px; font-size: 24px; color: rgba(255,255,255,.85);">
+      <div><span style="color: var(--purple-light); margin-right: 10px;">汇报人：</span>［ 姓名 ］</div>
+      <div><span style="color: var(--purple-light); margin-right: 10px;">汇报时间：</span>2026 年 4 月</div>
+      <div><span style="color: var(--purple-light); margin-right: 10px;">课题组：</span>［ XX 课题组 ］</div>
+    </div>
+
+    <div class="foot" style="color: rgba(255,255,255,.5);">Meeting 1 · End · Agent Systems Research Frontier</div>
+  </div>
+</section>
+
+</deck-stage>
+
+<script src="deck-stage.js"></script>
+</body>
+</html>
